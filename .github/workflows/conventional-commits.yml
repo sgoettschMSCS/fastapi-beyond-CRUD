@@ -42,7 +42,7 @@ jobs:
       - name: Close PR if Invalid
         if: env.PR_FAILED == 'true'
         run: |
-          gh pr close "$PR_NUMBER" --reason "not-planned"
+          gh pr close "$PR_NUMBER" -c "Closing PR due to invalid commit messages. Please update commit messages to follow Conventional Commits and reopen the PR."
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
