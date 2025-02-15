@@ -1,76 +1,73 @@
-name: Conventional Commits Check
+name: Check Conventional Commits
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, edited]
 
 jobs:
-  check-commits:
+  validate-commits:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Get PR commits
-        id: get-pr-commits
+      - name: Get Commit Messages
+        id: commits
         run: |
-          echo "commits=$(git log --format=%B ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }})" >> $GITHUB_OUTPUT
+          commits=$(git log --format='%s' ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }})
+          echo "COMMIT_MESSAGES<<EOF" >> $GITHUB_ENV
+          echo "$commits" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
 
-      - name: Check Conventional Commits
-        id: check-conventional-commits
+      - name: Validate Conventional Commit Format
+        id: validate
         run: |
-          # Regular expression for Conventional Commits
-          PATTERN='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test){1}(\([-a-zA-Z0-9]+\))?(!)?: .+'
-          
-          VALID=true
-          INVALID_COMMITS=""
-          
-          while IFS= read -r commit; do
-            if [[ ! -z "$commit" ]] && [[ ! "$commit" =~ $PATTERN ]]; then
-              VALID=false
-              INVALID_COMMITS="${INVALID_COMMITS}${commit}\n"
+          regex="^(feat|fix|docs|style|refactor|perf|test|chore|ci|build|revert)(\(.+\))?!?: .+"
+          valid=true
+          while IFS= read -r line; do
+            if ! [[ $line =~ $regex ]]; then
+              valid=false
+              echo "❌ Invalid commit: $line"
             fi
-          done <<< "${{ steps.get-pr-commits.outputs.commits }}"
-          
-          echo "valid=${VALID}" >> $GITHUB_OUTPUT
-          echo "invalid_commits=${INVALID_COMMITS}" >> $GITHUB_OUTPUT
+          done <<<"${{ env.COMMIT_MESSAGES }}"
 
-      - name: Create PR Comment
-        if: steps.check-conventional-commits.outputs.valid != 'true'
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const invalidCommits = `${{ steps.check-conventional-commits.outputs.invalid_commits }}`;
-            
-            const comment = `❌ This PR contains commits that don't follow the Conventional Commits format:
-            
-            ${invalidCommits}
-            
-            Please follow the Conventional Commits format:
-            - format: type(scope?): description
-            - example: feat(auth): add login functionality
-            
-            Valid types: build, chore, ci, docs, feat, fix, perf, refactor, revert, style, test
-            
-            For more information, see https://www.conventionalcommits.org/`;
-            
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: comment
-            });
-            
-            await github.rest.pulls.update({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number,
-              state: 'closed'
-            });
+          if [ "$valid" = false ]; then
+            echo "PR_FAILED=true" >> $GITHUB_ENV
+          else
+            echo "PR_FAILED=false" >> $GITHUB_ENV
+          fi
 
-      - name: PR Status Check
-        if: steps.check-conventional-commits.outputs.valid != 'true'
-        run: exit 1
+      - name: Close PR if Invalid
+        if: env.PR_FAILED == 'true'
+        run: |
+          gh pr close "$PR_NUMBER" --reason "not-planned"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+
+      - name: Send Email Notification on PR Failure (Ethereal Email)
+        if: env.PR_FAILED == 'true'
+        env:
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          PR_USER_EMAIL: ${{ github.event.pull_request.user.email }}
+        run: |
+          python - <<EOF
+          import smtplib
+          from email.message import EmailMessage
+
+          msg = EmailMessage()
+          msg["Subject"] = "🚨 PR Closed: Invalid Commit Messages"
+          msg["From"] = "${{ env.SMTP_USER }}"
+          msg["To"] = "${{ env.PR_USER_EMAIL }}"
+          msg.set_content("Your PR #${{ github.event.pull_request.number }} was closed because it contains invalid commit messages. Please update your commit messages to follow the Conventional Commit format and reopen the PR.")
+
+          with smtplib.SMTP("${{ env.SMTP_SERVER }}", int("${{ env.SMTP_PORT }}")) as server:
+              server.starttls()
+              server.login("${{ env.SMTP_USER }}", "${{ env.SMTP_PASS }}")
+              server.send_message(msg)
+          EOF
