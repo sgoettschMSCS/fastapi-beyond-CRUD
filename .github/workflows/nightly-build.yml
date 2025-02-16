@@ -1,0 +1,76 @@
+name: Nightly Build
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Run at midnight UTC daily
+  workflow_dispatch:  # Allows manual trigger for testing
+
+jobs:
+  nightly-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Run Tests
+        id: tests
+        run: |
+          docker compose up test
+        continue-on-error: true
+
+      - name: Send Email Notification on Test Failure
+        if: steps.tests.outcome == 'failure'
+        run: |
+          # Read credentials from .env.example
+          export SMTP_SERVER=$(grep SMTP_SERVER .env.example | cut -d'=' -f2)
+          export SMTP_PORT=$(grep SMTP_PORT .env.example | cut -d'=' -f2)
+          export SMTP_USER=$(grep SMTP_USER .env.example | cut -d'=' -f2)
+          export SMTP_PASS=$(grep SMTP_PASS .env.example | cut -d'=' -f2)
+          
+          python - <<EOF
+          import smtplib
+          import os
+          import sys
+          from email.message import EmailMessage
+
+          try:
+              msg = EmailMessage()
+              msg["Subject"] = "🚨 Nightly Build Failed: Test Cases Failed"
+              msg["From"] = os.environ["SMTP_USER"]
+              msg["To"] = os.environ["SMTP_USER"]
+              
+              msg.set_content("""
+              The nightly build has failed due to failing test cases.
+              The container image will not be pushed to the registry.
+              
+              Please check the GitHub Actions logs for more details.
+              """)
+
+              with smtplib.SMTP(os.environ["SMTP_SERVER"], int(os.environ["SMTP_PORT"])) as server:
+                  server.starttls()
+                  server.login(os.environ["SMTP_USER"], os.environ["SMTP_PASS"])
+                  server.send_message(msg)
+                  print("✅ Test failure notification email sent")
+          
+          except Exception as e:
+              print(f"❌ Error sending email: {str(e)}")
+              sys.exit(1)
+          EOF
+
+      - name: Build and push Docker image
+        if: steps.tests.outcome == 'success'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:nightly
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
