@@ -75,6 +75,25 @@ Run the tests using this command
 ```bash
 pytest
 ```
+### Commit Message Validation
+- All commits must follow the [Conventional Commits](https://www.conventionalcommits.org/) format
+- Invalid commits will cause PR closure and email notification
+- Format: `type(scope): description`
+- Valid types: feat, fix, docs, style, refactor, perf, test, chore, ci, build, revert
+
+### Nightly Builds
+- Automated builds run daily at midnight UTC
+- Tests are run before building container image
+- Failed tests prevent container image push and trigger notification
+- Successful builds are pushed to GitHub Container Registry
+
+## Development Setup
+1. Clone the repository
+2. Copy environment file: `cp .env.example .env`
+3. Start the application: `docker compose up`
+
+## Testing
+- Run tests: `docker compose up test`
 
 ## Contributing
 I welcome contributions to improve the documentation! You can contribute [here](https://github.com/jod35/fastapi-beyond-crud-docs).
