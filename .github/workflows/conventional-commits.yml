@@ -24,17 +24,28 @@ jobs:
       - name: Validate Conventional Commit Format
         id: validate
         run: |
-          regex="^(feat|fix|docs|style|refactor|perf|test|chore|ci|build|revert)(\(.+\))?!?: .+"
+          # Define the conventional commit format more readably
+          types="feat|fix|docs|style|refactor|perf|test|chore|ci|build|revert"
+          regex="^(${types})(\(.+\))?!?: .+"
+          
           valid=true
+          invalid_commits=()
+          
           while IFS= read -r line; do
             if ! [[ $line =~ $regex ]]; then
               valid=false
-              echo "❌ Invalid commit: $line"
+              invalid_commits+=("$line")
+              echo "❌ Invalid commit format: $line"
+              echo "   Expected format: type(scope)?: description"
+              echo "   Valid types: ${types}"
+            else
+              echo "✅ Valid commit: $line"
             fi
           done <<<"${{ env.COMMIT_MESSAGES }}"
-
+          
           if [ "$valid" = false ]; then
             echo "PR_FAILED=true" >> $GITHUB_ENV
+            echo "INVALID_COMMITS=$(printf '%s\n' "${invalid_commits[@]}")" >> $GITHUB_ENV
           else
             echo "PR_FAILED=false" >> $GITHUB_ENV
           fi
@@ -45,44 +56,58 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Install dependencies
-        if: env.PR_FAILED == 'true'
-        run: |
-          python -m pip install --upgrade pip
-          pip install python-dotenv
-
       - name: Send Email Notification on PR Failure (Ethereal Email)
         if: env.PR_FAILED == 'true'
         run: |
-          cp .env.example .env
+          # Export credentials from .env.example
+          export SMTP_SERVER=$(grep SMTP_SERVER .env.example | cut -d'=' -f2)
+          export SMTP_PORT=$(grep SMTP_PORT .env.example | cut -d'=' -f2)
+          export SMTP_USER=$(grep SMTP_USER .env.example | cut -d'=' -f2)
+          export SMTP_PASS=$(grep SMTP_PASS .env.example | cut -d'=' -f2)
+          
           python - <<EOF
           import smtplib
           import os
+          import sys
           from email.message import EmailMessage
-          from dotenv import load_dotenv
 
-          # Load environment variables
-          load_dotenv()
+          try:
+              msg = EmailMessage()
+              msg["Subject"] = "🚨 PR Closed: Invalid Commit Messages"
+              msg["From"] = os.environ["SMTP_USER"]
+              msg["To"] = os.environ["SMTP_USER"]  # Send to the same Ethereal email
+              
+              pr_num = os.environ.get('GITHUB_EVENT_NUMBER', '${{ github.event.pull_request.number }}')
+              msg.set_content(f"""
+              PR
 
-          # Create email message
-          msg = EmailMessage()
-          msg["Subject"] = "🚨 PR Closed: Invalid Commit Messages"
-          msg["From"] = os.getenv("SMTP_USER")
-          msg["To"] = os.getenv("SMTP_USER")  # Send to the same Ethereal email for testing
-          msg.set_content(f"PR #{os.environ.get('GITHUB_EVENT_NUMBER', '${{ github.event.pull_request.number }}')} contains invalid commit messages.")
+              Please ensure your commits follow the Conventional Commits format:
+              <type>[optional scope]: <description>
 
-          # Send email
-          with smtplib.SMTP(os.getenv("SMTP_SERVER"), int(os.getenv("SMTP_PORT"))) as server:
-              server.starttls()
-              server.login(os.getenv("SMTP_USER"), os.getenv("SMTP_PASS"))
-              server.send_message(msg)
-              print("Test email sent successfully to Ethereal Email")
+              Valid types: feat, fix, docs, style, refactor, perf, test, chore, ci, build, revert
+              Example: feat(auth): add login functionality
+              """)
+
+              with smtplib.SMTP(os.environ["SMTP_SERVER"], int(os.environ["SMTP_PORT"])) as server:
+                  server.starttls()
+                  server.login(os.environ["SMTP_USER"], os.environ["SMTP_PASS"])
+                  server.send_message(msg)
+                  print("✅ Test email sent successfully to Ethereal Email")
+          
+          except Exception as e:
+              print(f"❌ Error sending email: {str(e)}")
+              sys.exit(1)
           EOF
 
       - name: Close PR if Invalid
         if: env.PR_FAILED == 'true'
         run: |
-          gh pr close "$PR_NUMBER" -c "Closing PR due to invalid commit messages. Please update commit messages to follow Conventional Commits and reopen the PR."
+          gh pr close "$PR_NUMBER" -c "PR closed due to invalid commit messages. Please ensure your commits follow the Conventional Commits format:
+          - Format: <type>[optional scope]: <description>
+          - Valid types: feat, fix, docs, style, refactor, perf, test, chore, ci, build, revert
+          - Example: feat(auth): add login functionality
+
+          Update your commit messages and reopen the PR."
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
