@@ -61,22 +61,34 @@ jobs:
 
       - name: Send Email Notification on PR Failure (Ethereal Email)
         if: env.PR_FAILED == 'true'
+        working-directory: ${{ github.workspace }}  
         run: |
-          cp .env.example .env  # Copy the example env file to .env
+          pwd  # Debug: Print working directory
+          ls -la  # Debug: List all files
+          cp .env.example .env
           python - <<EOF
           import smtplib
           import os
           from email.message import EmailMessage
           from dotenv import load_dotenv
+          from pathlib import Path
 
-          # Load the .env file
-          load_dotenv()
+          # Use absolute path from workspace
+          env_path = Path('${{ github.workspace }}') / '.env'
+          print(f"Loading .env from: {env_path}")
+          
+          load_dotenv(dotenv_path=env_path)
+
+          # Verify env vars loaded
+          print(f"SMTP_SERVER: {os.getenv('SMTP_SERVER')}")
+          print(f"SMTP_PORT: {os.getenv('SMTP_PORT')}")
+          print(f"SMTP_USER: {os.getenv('SMTP_USER')}")
 
           msg = EmailMessage()
           msg["Subject"] = "🚨 PR Closed: Invalid Commit Messages"
           msg["From"] = os.getenv("SMTP_USER")
           msg["To"] = "${{ github.event.pull_request.user.email }}"
-          msg.set_content(f"Your PR #{os.environ['GITHUB_EVENT_NUMBER']} was closed because it contains invalid commit messages. Please update your commit messages to follow the Conventional Commit format and reopen the PR.")
+          msg.set_content(f"Your PR #{os.environ.get('GITHUB_EVENT_NUMBER', '${{ github.event.pull_request.number }}')} was closed because it contains invalid commit messages. Please update your commit messages to follow the Conventional Commit format and reopen the PR.")
 
           with smtplib.SMTP(os.getenv("SMTP_SERVER"), int(os.getenv("SMTP_PORT"))) as server:
               server.starttls()
