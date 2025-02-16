@@ -3,7 +3,7 @@ name: Nightly Build
 on:
   schedule:
     - cron: '0 0 * * *'  # Run at midnight UTC daily
-  workflow_dispatch:  # Allows manual trigger for testing
+  workflow_dispatch:  # Allow manual trigger for testing
 
 jobs:
   nightly-build:
@@ -12,18 +12,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.x'
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
       - name: Run Tests
         id: tests
         run: |
-          docker compose up test
+          docker compose run test
         continue-on-error: true
 
       - name: Send Email Notification on Test Failure
@@ -38,32 +30,27 @@ jobs:
           python - <<EOF
           import smtplib
           import os
-          import sys
           from email.message import EmailMessage
 
-          try:
-              msg = EmailMessage()
-              msg["Subject"] = "🚨 Nightly Build Failed: Test Cases Failed"
-              msg["From"] = os.environ["SMTP_USER"]
-              msg["To"] = os.environ["SMTP_USER"]
-              
-              msg.set_content("""
-              The nightly build has failed due to failing test cases.
-              The container image will not be pushed to the registry.
-              
-              Please check the GitHub Actions logs for more details.
-              """)
+          msg = EmailMessage()
+          msg["Subject"] = "🚨 Nightly Build Failed: Test Cases Failed"
+          msg["From"] = os.environ["SMTP_USER"]
+          msg["To"] = os.environ["SMTP_USER"]
+          msg.set_content("The nightly build has failed due to failing test cases.")
 
-              with smtplib.SMTP(os.environ["SMTP_SERVER"], int(os.environ["SMTP_PORT"])) as server:
-                  server.starttls()
-                  server.login(os.environ["SMTP_USER"], os.environ["SMTP_PASS"])
-                  server.send_message(msg)
-                  print("✅ Test failure notification email sent")
-          
-          except Exception as e:
-              print(f"❌ Error sending email: {str(e)}")
-              sys.exit(1)
+          with smtplib.SMTP(os.environ["SMTP_SERVER"], int(os.environ["SMTP_PORT"])) as server:
+              server.starttls()
+              server.login(os.environ["SMTP_USER"], os.environ["SMTP_PASS"])
+              server.send_message(msg)
           EOF
+
+      - name: Login to GitHub Container Registry
+        if: steps.tests.outcome == 'success'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push Docker image
         if: steps.tests.outcome == 'success'
@@ -71,6 +58,4 @@ jobs:
         with:
           context: .
           push: true
-          tags: |
-            ghcr.io/${{ github.repository }}:nightly
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
+          tags: ghcr.io/${{ github.repository }}:nightly
